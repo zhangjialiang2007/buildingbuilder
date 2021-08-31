@@ -24,13 +24,13 @@ GENERATED_BODY()
 	FString url;
 	float opacity;
 	
-	float top_roughness;
-	float top_metalness;
-	TMap<float, FString> top_condition;
+	float roof_roughness;
+	float roof_metalness;
+	TMap<float, FString> roof_condition;
 
-	float side_roughness;
-	float side_metalness;
-	TMap<float, FString> side_condition;
+	float wall_roughness;
+	float wall_metalness;
+	TMap<float, FString> wall_condition;
 };
 
 UENUM(BlueprintType)
@@ -80,20 +80,22 @@ protected:
 	FVector Lonlat2Mercator(double lon,double lat, double height = 0.0);
 	void ProcessCoords(double ref_x = 0.0,double ref_y = 0.0);
 
-	void CreateSideMesh();
-	void CreateSideMesh_PMCImp();
-	void CreateSideMesh_RawMeshImp();
+	void CreateWallMesh();
+	void CreateWallMesh_PMCImp();
+	void CreateWallMesh_RawMeshImp();
+	void divideRect_RawMeshImp(FVector cur_coord, FVector next_coord, double bottom, double top, FRawMesh& RawMesh);
 
-	void CreateTopMesh();
-	void CreateTopMesh_PMCImp();
-	void CreateTopMesh_RawMeshImp();
-
+	void CreateRoofMesh();
+	void CreateRoofMesh_PMCImp();
+	void CreateRoofMesh_RawMeshImp();
 	void divideConvexPolygon_PMCImp(TArray<FVector> polygon, double height, TArray<FVector>& Vertex, TArray<int32>& Index, TArray<FVector2D>& UV);
 	void divideConvexPolygon_RawMeshImp(TArray<FVector> polygon, double height, FRawMesh& RawMesh);
 	void divideConcavePolygon_PMCImp(TArray<FVector> polygon, double height, TArray<FVector>& Vertex, TArray<int32>& Index, TArray<FVector2D>& UV);
 	void divideConcavePolygon_RawMeshImp(TArray<FVector> polygon, double height, FRawMesh& RawMesh);
 
-	bool LoadImageToTexture2D(const FString& ImagePath, UTexture2D*& InTexture, float& Width, float& Height);
+	void SaveStaticMeshWithRawMesh(FString MeshName,FString MaterialName, FRawMesh RawMesh);
+
+	bool LoadImageToTexture2D(const FString& ImageName, UTexture2D*& InTexture, int32& Width, int32& Height);
 	UMaterialInterface* CreateMaterialInstanceDynamic(UTexture2D* InTexture,float Roughness,float Metallic );
 	UMaterialInterface* CreateMaterial(UTexture2D*& InTexture, FString material_name, float Roughness, float Metallic);
 
@@ -117,15 +119,17 @@ protected:
 	bool isSurplusPoint(TArray<FVector> polygon, int32 index);
 protected:
 	UPROPERTY(EditAnywhere)
-		UProceduralMeshComponent* side_pmc;
+		UProceduralMeshComponent* wall_pmc;
 	UPROPERTY(EditAnywhere)
-		UProceduralMeshComponent* top_pmc;
+		UProceduralMeshComponent* roof_pmc;
 
 private:
 	FString m_file_path;
 	TMap<int32, FGeoBuildingLayerInfo> m_building_layer_info;
 	TMap<int32, TArray<FBuildingInfo>> m_building_layer_data;
 	bool m_use_pmc;
+	float m_wall_top_dis;
+	float m_wall_bottom_dis;
 };
 
 

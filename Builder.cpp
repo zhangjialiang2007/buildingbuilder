@@ -1,6 +1,4 @@
 // Fill out your copyright notice in the Description page of Project Settings.
-
-
 #include "Builder.h"
 #include "Serialization/JsonSerializer.h"
 #include "IImageWrapper.h"
@@ -12,6 +10,14 @@
 #include "Materials/MaterialExpressionConstant.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "RawMesh.h"
+#include "Engine/Texture2D.h"
+#include "HAL/PlatformFilemanager.h"
+#include "HAL/FileManager.h"
+#include "Misc/Paths.h"
+#include "UObject/Package.h"
+
+
+
 
 const float	threshold = FLT_EPSILON;
 // Sets default values
@@ -21,12 +27,17 @@ ABuilder::ABuilder()
 	PrimaryActorTick.bCanEverTick = true;
 
 	m_file_path = FPaths::ProjectDir() + "Data/";
-	side_pmc = CreateDefaultSubobject<UProceduralMeshComponent>("side_pmc");
-	side_pmc->SetupAttachment(GetRootComponent());
-
-	top_pmc = CreateDefaultSubobject<UProceduralMeshComponent>("top_pmc");
-	top_pmc->SetupAttachment(GetRootComponent());
 	m_use_pmc = false;
+	wall_pmc = CreateDefaultSubobject<UProceduralMeshComponent>("wall_pmc");
+	wall_pmc->SetupAttachment(GetRootComponent());
+	m_wall_top_dis = 1.0;
+	m_wall_bottom_dis = 2.0;
+
+	roof_pmc = CreateDefaultSubobject<UProceduralMeshComponent>("roof_pmc");
+	roof_pmc->SetupAttachment(GetRootComponent());
+	
+	
+
 
 	//Material = nullptr;
 }
@@ -113,12 +124,12 @@ bool ABuilder::ParseMapJson()
 						}
 						building_layer_info.opacity = layerConfig->GetNumberField(TEXT("opacity"));
 						TArray<TSharedPtr<FJsonValue>> roughness = layerConfig->GetArrayField(TEXT("roughness"));
-						building_layer_info.top_roughness = roughness[0].Get()->AsNumber();
-						building_layer_info.side_roughness = roughness[1].Get()->AsNumber();
+						building_layer_info.roof_roughness = roughness[0].Get()->AsNumber();
+						building_layer_info.wall_roughness = roughness[1].Get()->AsNumber();
 
 						TArray<TSharedPtr<FJsonValue>> metalness = layerConfig->GetArrayField(TEXT("metalness"));
-						building_layer_info.top_metalness = metalness[0].Get()->AsNumber();
-						building_layer_info.side_metalness = metalness[1].Get()->AsNumber();
+						building_layer_info.roof_metalness = metalness[0].Get()->AsNumber();
+						building_layer_info.wall_metalness = metalness[1].Get()->AsNumber();
 
 
 						TArray<TSharedPtr<FJsonValue>> imageUrls = layerConfig->GetArrayField(TEXT("imageUrl"));
@@ -140,10 +151,10 @@ bool ABuilder::ParseMapJson()
 										height = FCString::Atof(*condition);
 									}
 								}
-								TTuple<float, FString> top_condition(height, values[0].Get()->AsString());
-								building_layer_info.top_condition.Add(top_condition);
-								TTuple<float, FString> side_condition(height, values[1].Get()->AsString());
-								building_layer_info.side_condition.Add(side_condition);
+								TTuple<float, FString> roof_condition(height, values[0].Get()->AsString());
+								building_layer_info.roof_condition.Add(roof_condition);
+								TTuple<float, FString> wall_condition(height, values[1].Get()->AsString());
+								building_layer_info.wall_condition.Add(wall_condition);
 							}
 						}
 						//增加对象
@@ -272,8 +283,8 @@ void ABuilder::CreateMesh()
 	//114.3,30.6---
 	ProcessCoords(114.3, 30.6);
 	FTransform transform;
-	CreateSideMesh();
-	CreateTopMesh();
+	CreateWallMesh();
+	CreateRoofMesh();
 }
 
 void ABuilder::ProcessCoords(double ref_x, double ref_y)
@@ -306,19 +317,19 @@ FVector ABuilder::Lonlat2Mercator(double lon, double lat, double height)
 	return mercator;
 }
 
-void ABuilder::CreateSideMesh()
+void ABuilder::CreateWallMesh()
 {
 	if (m_use_pmc)
 	{
-		CreateSideMesh_PMCImp();
+		CreateWallMesh_PMCImp();
 	}
 	else
 	{
-		CreateSideMesh_RawMeshImp();
+		CreateWallMesh_RawMeshImp();
 	}
 }
 
-void ABuilder::CreateSideMesh_PMCImp()
+void ABuilder::CreateWallMesh_PMCImp()
 {
 	for (auto it_layer_data = m_building_layer_data.begin(); it_layer_data != m_building_layer_data.end(); ++it_layer_data)
 	{
@@ -383,138 +394,117 @@ void ABuilder::CreateSideMesh_PMCImp()
 		}
 
 		Tangents.Init(FProcMeshTangent(1.0f, 0.0f, 0.0f), Verties.Num());
-		side_pmc->CreateMeshSection(1, Verties, Index, Normals, UV, UV, UV, UV, VertexColors, Tangents, true);
-		side_pmc->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		wall_pmc->CreateMeshSection(1, Verties, Index, Normals, UV, UV, UV, UV, VertexColors, Tangents, true);
+		wall_pmc->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
 
-		FString image_path = "F:/3.png";
+		FString image_name = "2.png";
 		UTexture2D* texture = nullptr;
-		float width, height;
-		if (LoadImageToTexture2D(image_path, texture, width, height))
+		int32 width, height;
+		if (LoadImageToTexture2D(image_name, texture, width, height))
 		{
-			UMaterialInterface* Material = CreateMaterial(texture, "side_material", 0.7, 0.4);
-			side_pmc->SetMaterial(1, Material);
+			UMaterialInterface* Material = CreateMaterial(texture, "wall_material", 0.7, 0.4);
+			wall_pmc->SetMaterial(1, Material);
 		}
 	}
 }
-void ABuilder::CreateSideMesh_RawMeshImp()
+void ABuilder::CreateWallMesh_RawMeshImp()
 {
-	//设定模型名字
-	FString MeshName = "side_mesh";
-	//设定包的路径
-	FString PackageName = "/Game/" + MeshName;
-	//创建包
-	UPackage* MeshPackage = CreatePackage(nullptr, *PackageName);
-	//创建StaticMesh资源
-	UStaticMesh* StaticMesh = NewObject< UStaticMesh >(MeshPackage, FName(*MeshName), RF_Public | RF_Standalone);
-
-	FRawMesh RawMesh;
+	const int32 m_wall_center_random_count = 5;
+	FRawMesh TotalRawMesh;
+	FRawMesh TopRawMesh;
+	FRawMesh BottomRawMesh;
+	FRawMesh CenterRawMeshs[m_wall_center_random_count];
 	for (auto it_layer_data = m_building_layer_data.begin(); it_layer_data != m_building_layer_data.end(); ++it_layer_data)
 	{
 		int32 layer_id = it_layer_data->Key;
 		TArray<FBuildingInfo> building_data = it_layer_data->Value;
+		int32 building_index = 0;
+		
 		for (FBuildingInfo build : building_data)
 		{
+		    building_index++;
+			if (building_index == m_wall_center_random_count)
+			{
+				building_index = 0;
+			}
+			FRawMesh& CenterRawMesh = CenterRawMeshs[building_index];
 			double height = build.height;
 			int count = build.coords.Num();
 			for (int i = 0; i < count; i++)
 			{
-
 				FVector cur_coord = build.coords[i];
 				int32 next_index = i + 1 == count ? 0 : i + 1;
 				FVector next_coord = build.coords[next_index];
-				int delta = RawMesh.VertexPositions.Num();
-
-				RawMesh.VertexPositions.Add(FVector(cur_coord.X, cur_coord.Y, 0));
-				RawMesh.VertexPositions.Add(FVector(cur_coord.X, cur_coord.Y, height));
-				RawMesh.VertexPositions.Add(FVector(next_coord.X, next_coord.Y, 0));
-				RawMesh.VertexPositions.Add(FVector(next_coord.X, next_coord.Y, height));
-
-
-				int index0 = 0 + delta;
-				int index1 = 1 + delta;
-				int index2 = 2 + delta;
-				int index3 = 3 + delta;
-				RawMesh.WedgeIndices.Add(index0);
-				RawMesh.WedgeIndices.Add(index1);
-				RawMesh.WedgeIndices.Add(index2);
-				RawMesh.WedgeIndices.Add(index1);
-				RawMesh.WedgeIndices.Add(index3);
-				RawMesh.WedgeIndices.Add(index2);
-
-				RawMesh.WedgeTexCoords->Add(FVector2D(0.0f, 0.0f));
-				RawMesh.WedgeTexCoords->Add(FVector2D(0.0f, 1.0f));
-				RawMesh.WedgeTexCoords->Add(FVector2D(1.0f, 0.0f));
-				RawMesh.WedgeTexCoords->Add(FVector2D(0.0f, 1.0f));
-				RawMesh.WedgeTexCoords->Add(FVector2D(1.0f, 1.0f));
-				RawMesh.WedgeTexCoords->Add(FVector2D(1.0f, 0.0f));
-
-
-				RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
-				RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
-				RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
-				RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
-				RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
-				RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
-				RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
-				RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
-				RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
-				RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
-				RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
-				RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
-				RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
-				RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
-				RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
-				RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
-				RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
-				RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
-
-				RawMesh.WedgeColors.Add(FColor(1.0f, 1.0f, 1.0f, 1.0f));
-				RawMesh.WedgeColors.Add(FColor(1.0f, 1.0f, 1.0f, 1.0f));
-				RawMesh.WedgeColors.Add(FColor(1.0f, 1.0f, 1.0f, 1.0f));
-				RawMesh.WedgeColors.Add(FColor(1.0f, 1.0f, 1.0f, 1.0f));
-				RawMesh.WedgeColors.Add(FColor(1.0f, 1.0f, 1.0f, 1.0f));
-				RawMesh.WedgeColors.Add(FColor(1.0f, 1.0f, 1.0f, 1.0f));
-
-				RawMesh.FaceMaterialIndices.Add(0);
-				RawMesh.FaceMaterialIndices.Add(0);
-				RawMesh.FaceSmoothingMasks.Add(0);
-				RawMesh.FaceSmoothingMasks.Add(0);
-
+				divideRect_RawMeshImp(cur_coord,next_coord,0,height,TotalRawMesh);
+				divideRect_RawMeshImp(cur_coord, next_coord, height - m_wall_top_dis, height, TopRawMesh);
+				divideRect_RawMeshImp(cur_coord, next_coord, m_wall_bottom_dis, height - m_wall_top_dis, CenterRawMesh);
+				divideRect_RawMeshImp(cur_coord, next_coord, 0, m_wall_bottom_dis, BottomRawMesh);
 			}
 		}
 	}
 
-	StaticMesh->PreEditChange(nullptr);
-	FStaticMeshSourceModel& SrcModel = StaticMesh->AddSourceModel();
-	SrcModel.SaveRawMesh(RawMesh);
-
-	FString image_path = "F:/3.png";
-	UTexture2D* texture = nullptr;
-	float width, height;
-	if (LoadImageToTexture2D(image_path, texture, width, height))
+	SaveStaticMeshWithRawMesh("total_wall_mesh","total_wall_material", TotalRawMesh);
+	SaveStaticMeshWithRawMesh("top_wall_mesh","top_wall_material", TopRawMesh);
+	for (int i = 0; i < m_wall_center_random_count; i++)
 	{
-		UMaterialInterface* Material = CreateMaterial(texture, "side_material", 0.7, 0.4);
-		StaticMesh->AddMaterial(Material);
+		SaveStaticMeshWithRawMesh("center_wall_mesh" + FString::FromInt(i),"ceter_wall_material"+FString::FromInt(i), CenterRawMeshs[i]);
 	}
+	SaveStaticMeshWithRawMesh("bottom_wall_mesh","bottom_wall_material", BottomRawMesh);
+}
+void ABuilder::divideRect_RawMeshImp(FVector cur_coord, FVector next_coord, double bottom,double top, FRawMesh& RawMesh )
+{
+	int delta = RawMesh.VertexPositions.Num();
+	RawMesh.VertexPositions.Add(FVector(cur_coord.X, cur_coord.Y, bottom));
+	RawMesh.VertexPositions.Add(FVector(cur_coord.X, cur_coord.Y, top));
+	RawMesh.VertexPositions.Add(FVector(next_coord.X, next_coord.Y, bottom));
+	RawMesh.VertexPositions.Add(FVector(next_coord.X, next_coord.Y, top));
 
-	TArray< FText > BuildErrors;
-	StaticMesh->Build(true, &BuildErrors);
-	FAssetRegistryModule::AssetCreated(StaticMesh);
+	int index0 = 0 + delta;
+	int index1 = 1 + delta;
+	int index2 = 2 + delta;
+	int index3 = 3 + delta;
+	RawMesh.WedgeIndices.Add(index0);
+	RawMesh.WedgeIndices.Add(index1);
+	RawMesh.WedgeIndices.Add(index2);
+	RawMesh.WedgeIndices.Add(index1);
+	RawMesh.WedgeIndices.Add(index3);
+	RawMesh.WedgeIndices.Add(index2);
+
+	RawMesh.WedgeTexCoords->Add(FVector2D(0.0f, 0.0f));
+	RawMesh.WedgeTexCoords->Add(FVector2D(0.0f, 1.0f));
+	RawMesh.WedgeTexCoords->Add(FVector2D(1.0f, 0.0f));
+	RawMesh.WedgeTexCoords->Add(FVector2D(0.0f, 1.0f));
+	RawMesh.WedgeTexCoords->Add(FVector2D(1.0f, 1.0f));
+	RawMesh.WedgeTexCoords->Add(FVector2D(1.0f, 0.0f));
+
+	for (int face = 0; face < 2; face++)
+	{
+		RawMesh.FaceMaterialIndices.Add(0);
+		RawMesh.FaceSmoothingMasks.Add(0);
+		for (int corner = 0; corner < 3; corner++)
+		{
+			RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
+			RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
+			RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
+
+			RawMesh.WedgeColors.Add(FColor(1.0f, 1.0f, 1.0f, 1.0f));
+		}
+	}
 }
 
-void ABuilder::CreateTopMesh()
+void ABuilder::CreateRoofMesh()
 {
 	if (m_use_pmc)
 	{
-		CreateTopMesh_PMCImp();
+		CreateRoofMesh_PMCImp();
 	}
 	else
 	{
-		CreateTopMesh_RawMeshImp();
+		CreateRoofMesh_RawMeshImp();
 	}
 }
-void ABuilder::CreateTopMesh_PMCImp()
+void ABuilder::CreateRoofMesh_PMCImp()
 {
 	for (auto it_layer_data = m_building_layer_data.begin(); it_layer_data != m_building_layer_data.end(); ++it_layer_data)
 	{
@@ -544,31 +534,22 @@ void ABuilder::CreateTopMesh_PMCImp()
 		VertexColors.Init(FColor(1.0f, 1.0f, 1.0f, 0.5f), Vertes.Num());
 		Normals.Init(FVector(0.0, 0.0f, 1.0), Vertes.Num());
 		Tangents.Init(FProcMeshTangent(1.0f, 0.0f, 0.0f), Vertes.Num());
-		top_pmc->CreateMeshSection(0, Vertes, Index, Normals, UV, UV, UV, UV, VertexColors, Tangents, true);
-		top_pmc->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		roof_pmc->CreateMeshSection(0, Vertes, Index, Normals, UV, UV, UV, UV, VertexColors, Tangents, true);
+		roof_pmc->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
 
-		FString image_path = "F:/1.png";
+		FString image_name = "1.png";
 		UTexture2D* texture = nullptr;
-		float width, height;
-		if (LoadImageToTexture2D(image_path, texture, width, height))
+		int32 width, height;
+		if (LoadImageToTexture2D(image_name, texture, width, height))
 		{
-			UMaterialInterface* Material = CreateMaterial(texture, "top_material", 0.7, 0.4);
-			top_pmc->SetMaterial(0, Material);
+			UMaterialInterface* Material = CreateMaterial(texture, "roof_material", 0.7, 0.4);
+			roof_pmc->SetMaterial(0, Material);
 		}
 	}
 }
-void ABuilder::CreateTopMesh_RawMeshImp()
+void ABuilder::CreateRoofMesh_RawMeshImp()
 {
-	//设定模型名字
-	FString MeshName = "top_mesh";
-	//设定包的路径
-	FString PackageName = "/Game/" + MeshName;
-	//创建包
-	UPackage* MeshPackage = CreatePackage(nullptr, *PackageName);
-	//创建StaticMesh资源
-	UStaticMesh* StaticMesh = NewObject< UStaticMesh >(MeshPackage, FName(*MeshName), RF_Public | RF_Standalone);
-
 	FRawMesh RawMesh;
 	for (auto it_layer_data = m_building_layer_data.begin(); it_layer_data != m_building_layer_data.end(); ++it_layer_data)
 	{
@@ -588,22 +569,8 @@ void ABuilder::CreateTopMesh_RawMeshImp()
 			}
 		}
 	}
-	StaticMesh->PreEditChange(nullptr);
-	FStaticMeshSourceModel& SrcModel = StaticMesh->AddSourceModel();
-	SrcModel.SaveRawMesh(RawMesh);
 
-	FString image_path = "F:/1.png";
-	UTexture2D* texture = nullptr;
-	float width, height;
-	if (LoadImageToTexture2D(image_path, texture, width, height))
-	{
-		UMaterialInterface* Material = CreateMaterial(texture, "top_material", 0.7, 0.4);
-		StaticMesh->AddMaterial(Material);
-	}
-
-	TArray< FText > BuildErrors;
-	StaticMesh->Build(true, &BuildErrors);
-	FAssetRegistryModule::AssetCreated(StaticMesh);
+	SaveStaticMeshWithRawMesh("roof_mesh","roof_material",RawMesh);
 }
 void ABuilder::divideConvexPolygon_PMCImp(TArray<FVector> polygon, double height, TArray<FVector>& Vertex, TArray<int32>& Index, TArray<FVector2D>& UV)
 {
@@ -683,18 +650,17 @@ void ABuilder::divideConvexPolygon_RawMeshImp(TArray<FVector> polygon, double he
 		RawMesh.WedgeTexCoords->Add(FVector2D(u1, v1));
 
 
-		RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
-		RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
-		RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
-		RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
-		RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
-		RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
-		RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
-		RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
-		RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
-
 		RawMesh.FaceMaterialIndices.Add(0);
 		RawMesh.FaceSmoothingMasks.Add(0);
+		for (int corner = 0; corner < 3; corner++)
+		{
+			RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
+			RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
+			RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
+
+			RawMesh.WedgeColors.Add(FColor(1.0f, 1.0f, 1.0f, 1.0f));
+		}
+	
 	}
 }
 void ABuilder::divideConcavePolygon_PMCImp(TArray<FVector> polygon, double height, TArray<FVector>& Vertex, TArray<int32>& Index, TArray<FVector2D>& UV)
@@ -833,18 +799,18 @@ void ABuilder::divideConcavePolygon_RawMeshImp(TArray<FVector> polygon, double h
 			RawMesh.WedgeTexCoords->Add(FVector2D(cur_u, cur_v));
 
 
-			RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
-			RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
-			RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
-			RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
-			RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
-			RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
-			RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
-			RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
-			RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
 
 			RawMesh.FaceMaterialIndices.Add(0);
 			RawMesh.FaceSmoothingMasks.Add(0);
+			for (int corner = 0; corner < 3; corner++)
+			{
+				RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
+				RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
+				RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
+
+				RawMesh.WedgeColors.Add(FColor(1.0f, 1.0f, 1.0f, 1.0f));
+			}
+			
 
 			polygon.RemoveAt(index);
 			count = polygon.Num();
@@ -876,23 +842,49 @@ void ABuilder::divideConcavePolygon_RawMeshImp(TArray<FVector> polygon, double h
 	RawMesh.WedgeTexCoords->Add(FVector2D(cur_u, cur_v));
 
 
-	RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
-	RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
-	RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
-	RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
-	RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
-	RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
-	RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
-	RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
-	RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
-
 	RawMesh.FaceMaterialIndices.Add(0);
 	RawMesh.FaceSmoothingMasks.Add(0);
+	for (int corner = 0; corner < 3; corner++)
+	{
+		RawMesh.WedgeTangentX.Add(FVector(1, 0, 0));
+		RawMesh.WedgeTangentY.Add(FVector(0, 1, 0));
+		RawMesh.WedgeTangentZ.Add(FVector(0, 0, 1));
+
+		RawMesh.WedgeColors.Add(FColor(1.0f, 1.0f, 1.0f, 1.0f));
+	}
+	
 }
 
-
-bool ABuilder::LoadImageToTexture2D(const FString& ImagePath, UTexture2D*& InTexture, float& Width, float& Height)
+void ABuilder::SaveStaticMeshWithRawMesh(FString MeshName, FString MaterialName, FRawMesh RawMesh)
 {
+	FString PackageName = "/Game/Mesh/" + MeshName;
+	UPackage* MeshPackage = CreatePackage(nullptr, *PackageName);
+	UStaticMesh* StaticMesh = NewObject< UStaticMesh >(MeshPackage, FName(*MeshName), RF_Public | RF_Standalone);
+	FAssetRegistryModule::AssetCreated(StaticMesh);
+	StaticMesh->PreEditChange(nullptr);
+	FStaticMeshSourceModel& SrcModel = StaticMesh->AddSourceModel();
+	SrcModel.SaveRawMesh(RawMesh);
+
+	//先临时这么读吧
+	FString image_name = MaterialName + ".png";
+	UTexture2D* texture = nullptr;
+	int32 width, height;
+	if (LoadImageToTexture2D(image_name, texture, width, height))
+	{
+	 	UMaterialInterface* Material = CreateMaterial(texture, MaterialName, 0.7, 0.4);
+	 	StaticMesh->AddMaterial(Material);
+	}
+	TArray< FText > BuildErrors;
+	StaticMesh->Build(true, &BuildErrors);
+	
+	StaticMesh->MarkPackageDirty();
+	FString PackageFileName = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension());
+	bool Saved = UPackage::SavePackage(MeshPackage, StaticMesh, EObjectFlags::RF_Public | EObjectFlags::RF_Standalone, *PackageFileName);
+}
+
+bool ABuilder::LoadImageToTexture2D(const FString& ImageName, UTexture2D*& InTexture, int32& Width, int32& Height)
+{
+    FString ImagePath = FPaths::ProjectContentDir() + "Image/" + ImageName;
 	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
 	if (!PlatformFile.FileExists(*ImagePath))
 	{
@@ -900,7 +892,6 @@ bool ABuilder::LoadImageToTexture2D(const FString& ImagePath, UTexture2D*& InTex
 	}
 	TArray<uint8> ImageResultData;
 	FFileHelper::LoadFileToArray(ImageResultData, *ImagePath);
-
 	FString Ex = FPaths::GetExtension(ImagePath, false);
 	EImageFormat ImageFormat = EImageFormat::Invalid;
 	if (Ex.Equals(TEXT("jpg"), ESearchCase::IgnoreCase) || Ex.Equals(TEXT("jpeg"), ESearchCase::IgnoreCase))
@@ -919,25 +910,47 @@ bool ABuilder::LoadImageToTexture2D(const FString& ImagePath, UTexture2D*& InTex
 	{
 		return false;
 	}
-
 	IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>("ImageWrapper");
 	TSharedPtr<IImageWrapper> ImageWrapperPtr = ImageWrapperModule.CreateImageWrapper(ImageFormat);
 
 	if (ImageWrapperPtr.IsValid() && ImageWrapperPtr->SetCompressed(ImageResultData.GetData(), ImageResultData.Num()))
 	{
-		TArray<uint8> OutRawData;//格式无关的颜色数据
+		int32 index = 0;
+		ImageName.FindChar('.', index);
+		FString AssetName = ImageName.Left(index);
+		FString PackageName = "/Game/Texture/" + AssetName;
+		UPackage* Package = CreatePackage(NULL, *PackageName);
+
+		TArray<uint8> OutRawData;
 		ImageWrapperPtr->GetRaw(ERGBFormat::BGRA, 8, OutRawData);
 		Width = ImageWrapperPtr->GetWidth();
 		Height = ImageWrapperPtr->GetHeight();
-		InTexture = UTexture2D::CreateTransient(Width, Height, PF_B8G8R8A8);
-		if (InTexture)
-		{
-			void* TextureData = InTexture->PlatformData->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
-			FMemory::Memcpy(TextureData, OutRawData.GetData(), OutRawData.Num());
-			InTexture->PlatformData->Mips[0].BulkData.Unlock();
-			InTexture->UpdateResource();
-			return true;
-		}
+	
+		InTexture = NewObject<UTexture2D>(Package,*AssetName,RF_Standalone | RF_Public);
+		FAssetRegistryModule::AssetCreated(InTexture);
+		InTexture->PlatformData = new FTexturePlatformData();
+		InTexture->PlatformData->SizeX = Width;
+		InTexture->PlatformData->SizeY = Height;
+		InTexture->PlatformData->PixelFormat = PF_B8G8R8A8;
+
+		FTexture2DMipMap* Mip = new FTexture2DMipMap();
+		Mip->SizeX = Width;
+		Mip->SizeY = Height;
+		Mip->BulkData.Lock(LOCK_READ_WRITE);
+		void* TextureData = Mip->BulkData.Realloc(Width * Height * 4);
+		FMemory::Memcpy(TextureData, OutRawData.GetData(), OutRawData.Num());
+		Mip->BulkData.Unlock();
+		InTexture->PlatformData->Mips.Add(Mip);
+
+		InTexture->MipGenSettings = TMGS_NoMipmaps;
+		InTexture->Source.Init(Width,Height,1,1,ETextureSourceFormat::TSF_BGRA8, OutRawData.GetData());
+
+		InTexture->UpdateResource();
+		InTexture->MarkPackageDirty();
+		FString PackageFileName = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension());
+		bool Saved = UPackage::SavePackage(Package, InTexture, EObjectFlags::RF_Public | EObjectFlags::RF_Standalone, *PackageFileName);
+		return Saved;
+		
 	}
 	return false;
 }
@@ -958,38 +971,46 @@ UMaterialInterface* ABuilder::CreateMaterialInstanceDynamic(UTexture2D* InTextur
 }
 UMaterialInterface* ABuilder::CreateMaterial(UTexture2D*& InTexture, FString material_name, float Roughness, float Metallic)
 {
-	FString PackageName = "/Game/" + material_name;
+	FString PackageName = "/Game/Material/" + material_name;
 	UPackage* Package = CreatePackage(NULL, *PackageName);
-	UMaterialFactoryNew* MaterialFactory = NewObject<UMaterialFactoryNew>();
-	//UMaterial* material = NewObject<UMaterial>(Package, FName(*material_name), RF_Public | RF_Standalone);
-	UMaterial* material = (UMaterial*)MaterialFactory->FactoryCreateNew(UMaterial::StaticClass(),Package,*material_name,RF_Standalone | RF_Public,nullptr,nullptr);
+	//UMaterialFactoryNew* MaterialFactory = NewObject<UMaterialFactoryNew>();
+	//UMaterial* material = (UMaterial*)MaterialFactory->FactoryCreateNew(UMaterial::StaticClass(),Package,*material_name,RF_Standalone | RF_Public,nullptr,nullptr);
+	UMaterial* material = NewObject<UMaterial>(Package, FName(*material_name), RF_Public | RF_Standalone);
 	FAssetRegistryModule::AssetCreated(material);
-	Package->FullyLoad();
-	Package->SetDirtyFlag(true);
 	
 	UMaterialExpressionTextureSample* tex_sample = NewObject<UMaterialExpressionTextureSample>(material);
 	tex_sample->Texture = InTexture;
 	tex_sample->SamplerType = SAMPLERTYPE_Color;
 	material->BaseColor.Expression = tex_sample;
-	material->BlendMode = BLEND_Translucent;
-	UMaterialExpressionConstant* opacity = NewObject<UMaterialExpressionConstant>(material);
-	opacity->R = 0.5;
-	material->Opacity.Expression = opacity;
-	UMaterialExpressionConstant* roughness = NewObject<UMaterialExpressionConstant>(material);
-	roughness->R = Roughness;
-	material->Roughness.Expression = roughness;
-	UMaterialExpressionConstant* metalness = NewObject<UMaterialExpressionConstant>(material);
-	metalness->R = Metallic;
-	material->Metallic.Expression = metalness;
-	material->TranslucencyLightingMode = TLM_Surface;
-	material->TwoSided = true;
+	material->Expressions.Add(tex_sample);
+
+	
+ 	UMaterialExpressionConstant* opacity = NewObject<UMaterialExpressionConstant>(material);
+ 	opacity->R = 0.5;
+ 	material->Opacity.Expression = opacity;
+	material->Expressions.Add(opacity);
+
+ 	UMaterialExpressionConstant* roughness = NewObject<UMaterialExpressionConstant>(material);
+ 	roughness->R = Roughness;
+ 	material->Roughness.Expression = roughness;
+	material->Expressions.Add(roughness);
+
+ 	UMaterialExpressionConstant* metalness = NewObject<UMaterialExpressionConstant>(material);
+ 	metalness->R = Metallic;
+ 	material->Metallic.Expression = metalness;
+	material->Expressions.Add(metalness);
+
+	material->BlendMode = BLEND_Opaque;
+ 	material->TranslucencyLightingMode = TLM_Surface;
+ 	material->TwoSided = true;
+	material->SetFlags(RF_Standalone | RF_Public);
 	material->PreEditChange(nullptr);
 	material->PostEditChange();
-	material->SetFlags(RF_Standalone | RF_Public);
 	material->MarkPackageDirty();
 
-	// 	FString PackageFileName = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension());
-	// 	bool Saved = UPackage::SavePackage(Package, InTexture, EObjectFlags::RF_Public | EObjectFlags::RF_Standalone, *PackageFileName);
+	FString PackageFileName = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension());
+	bool Saved = UPackage::SavePackage(Package, InTexture, EObjectFlags::RF_Public | EObjectFlags::RF_Standalone, *PackageFileName);
+	
 	return material;
 }
 
